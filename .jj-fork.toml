@@ -1,0 +1,16 @@
+# jj-fork configuration. Commit this file; personal overrides go in jj config under jj-fork.*.
+
+[upstream]
+url = "https://github.com/NousResearch/hermes-agent.git"
+remote = "upstream"
+branch = "main"
+
+[fork]
+remote = "origin"
+branch = "fork/main"
+series_prefixes = ["patch/", "tooling/"]
+glue_prefix = "glue/"
+mirror_branch = "main"
+
+# Hermes has no cheap universal check for every language/surface. Ship and the
+# fork owner must run the relevant build/tests on each series alone instead.

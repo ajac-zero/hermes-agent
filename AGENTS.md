@@ -5,6 +5,10 @@ applies everywhere, then a routing table. Each area's `AGENTS.md` loads automati
 in that directory; read it before editing there. `python scripts/check` caps this file at 12k chars
 and every root-to-area chain at 30k, so it loads whole on 128k+ models: long form goes in the guide.
 
+## This fork's version-control workflow
+
+Follow .agents/fork-owner.md for maintenance and .agents/ship.md for shipping. Never edit generated fork/main; keep fork-only config in tooling/agent-workflow.
+
 **Never give up on the right solution.**
 
 ## What Hermes Is

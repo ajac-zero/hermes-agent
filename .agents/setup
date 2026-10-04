@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PATH="$HOME/.local/bin:$PATH"
+export HERMES_HOME="${HERMES_HOME:-$HOME/.cache/hermes-fork/home}"
+export HERMES_RUNTIME_DIR="${HERMES_RUNTIME_DIR:-$HOME/.cache/hermes-fork/tools}"
+
+echo '== System prerequisites =='
+missing=()
+for package in build-essential pkg-config git-lfs; do
+  if [[ "$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)" != 'install ok installed' ]]; then
+    missing+=("$package")
+  fi
+done
+if ((${#missing[@]})); then
+  sudo apt-get update -qq
+  sudo apt-get install -y --no-install-recommends "${missing[@]}"
+fi
+git lfs install --local
+git_version="$(git version | awk '{print $3}')"
+if [[ "$(printf '%s\n' 2.41.0 "$git_version" | sort -V | head -1)" != 2.41.0 ]]; then
+  echo 'jj requires Git >= 2.41; upgrade the orb Git before setup.' >&2
+  exit 1
+fi
+
+echo '== Pinned fork tools =='
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$HOME/.local/bin"
+jj_version=0.43.0
+if [[ "$(jj --version 2>/dev/null || true)" != "jj $jj_version"* ]]; then
+  asset="jj-v${jj_version}-x86_64-unknown-linux-musl.tar.gz"
+  curl -fsSL --retry 3 "https://github.com/jj-vcs/jj/releases/download/v${jj_version}/$asset" -o "$tmp/$asset"
+  echo "59e5588583ac82b623239929368c65b90735931c0f26b5a16c1f04d5bb97643d  $tmp/$asset" | sha256sum -c -
+  tar -xzf "$tmp/$asset" -C "$tmp" ./jj
+  install -m 0755 "$tmp/jj" "$HOME/.local/bin/jj"
+fi
+jj_fork_version=0.2.8
+if [[ "$(jj-fork --version 2>/dev/null || true)" != "jj-fork $jj_fork_version" ]]; then
+  asset="jj-fork-v${jj_fork_version}-x86_64-unknown-linux-gnu.tar.gz"
+  url="https://github.com/ajac-zero/jj-fork/releases/download/v${jj_fork_version}"
+  curl -fsSL --retry 3 "$url/$asset" -o "$tmp/$asset"
+  curl -fsSL --retry 3 "$url/$asset.sha256" -o "$tmp/$asset.sha256"
+  (cd "$tmp" && sha256sum -c "$asset.sha256")
+  echo "8c1ba21d90780f49c3e9cd88483b765e0d218d3d1f439eccb9486567730f5f79  $tmp/$asset" | sha256sum -c -
+  tar -xzf "$tmp/$asset" -C "$tmp"
+  install -m 0755 "$tmp/jj-fork-v${jj_fork_version}-x86_64-unknown-linux-gnu/jj-fork" "$HOME/.local/bin/jj-fork"
+fi
+
+echo '== Initialize this clone =='
+# jj does not apply Git's per-path EOL attributes. Keep PowerShell checkouts LF
+# in this Linux orb only; preserve committed CRLF in other files byte-for-byte.
+attributes="$(git rev-parse --git-path info/attributes)"
+if ! grep -Fqx '*.ps1 text eol=lf' "$attributes" 2>/dev/null; then
+  mkdir -p "$(dirname "$attributes")"
+  printf '\n*.ps1 text eol=lf\n' >> "$attributes"
+fi
+if [[ ! -d "$repo_root/.jj" ]]; then
+  # Never overwrite an edited PowerShell file when initializing an existing clone.
+  git diff --quiet -- '*.ps1'
+  git diff --cached --quiet -- '*.ps1'
+  jj --config working-copy.eol-conversion=none git init --colocate "$repo_root"
+  # Git's stat cache can skip rewriting CRLF even after the attribute override.
+  # Restore the verified-clean scripts from the committed tree through jj.
+  jj restore --from @- 'glob:**/*.ps1'
+  git add --renormalize -- '*.ps1'
+fi
+jj config set --repo working-copy.eol-conversion none
+jj-fork init
+jj-fork alias
+
+echo '== Hermes PM development/test environment =='
+time "$repo_root/scripts/run-in-hermes-env" true
+echo '== JavaScript workspaces =='
+time "$repo_root/scripts/run-in-hermes-env" npm ci --no-audit --no-fund
+
+# Compose the complete installed PM environment in future non-interactive login
+# shells, without installing packages or authenticating during shell startup.
+marker='# hermes-fork orb development environment'
+if ! grep -Fqx "$marker" "$HOME/.bash_profile" 2>/dev/null; then
+  cat >> "$HOME/.bash_profile" <<EOF
+
+$marker
+if [[ "\$PWD" == "$repo_root" || "\$PWD" == "$repo_root/"* ]]; then
+  export HERMES_HOME="\${HERMES_HOME:-$HERMES_HOME}"
+  export HERMES_RUNTIME_DIR="\${HERMES_RUNTIME_DIR:-$HERMES_RUNTIME_DIR}"
+  source "$repo_root/scripts/_activation.sh"
+  hermes_apply_env "\$(hermes_compose_env "$repo_root" sh)"
+  export PATH="\$HOME/.local/bin:\$PATH"
+fi
+EOF
+fi
+echo '== Fork orb setup complete =='
