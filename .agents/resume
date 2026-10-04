@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Amp can append ~/.env loading after setup, overwriting PM's PATH. Keep only
+# our own activation stanza last; preserve all other login-shell initialization.
+profile="$HOME/.bash_profile"
+marker='# hermes-fork orb development environment'
+grep -Fqx "$marker" "$profile"
+tmp="$(mktemp "$profile.XXXXXX")"
+trap 'rm -f "$tmp"' EXIT
+awk -v marker="$marker" '
+  $0 == marker { in_hook = 1 }
+  in_hook {
+    hook = hook $0 ORS
+    if ($0 == "fi") in_hook = 0
+    next
+  }
+  { print }
+  END { printf "%s", hook }
+' "$profile" > "$tmp"
+bash -n "$tmp"
+chmod --reference="$profile" "$tmp"
+mv "$tmp" "$profile"
